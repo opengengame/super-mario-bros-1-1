@@ -5,16 +5,17 @@ References:
 - https://github.com/facebookresearch/DiT/blob/main/train.py
 
 Running exmaples:
-$ NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --master_port 29502 --nnodes=1 \
+$ NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=6,7,8,9 torchrun --master_port 29502 --nnodes=1 \
     --node_rank=0 \
-    --nproc_per_node=8 train.py \
+    --nproc_per_node=4 train.py \
     --num-workers 4 \
     --model dit_xl_2 \
     --log-every 50 \
-    --ckpt-every 200 \
-    --global-batch-size 16 \
+    --ckpt-every 1000 \
+    --global-batch-size 8 \
     --dataset cifar10 \
     --data-path /tmp/cifar10 \
+    --num-classes 10
 """
 import importlib
 import torch
@@ -154,6 +155,7 @@ def main(args):
         input_size=latent_size,
         num_classes=args.num_classes
     )
+    model.load_state_dict(torch.load("./results/DiT-XL-2-256x256.pt", map_location="cpu"), strict=False)
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
@@ -163,7 +165,7 @@ def main(args):
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-5, weight_decay=0)
 
     # Setup data:
     transform = transforms.Compose([
