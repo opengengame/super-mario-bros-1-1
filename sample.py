@@ -57,20 +57,20 @@ def main(args):
     y = torch.tensor(class_labels, device=device)
 
     # Setup classifier-free guidance:
-    # z = torch.cat([z, z], 0)
-    # y_null = torch.tensor([10] * n, device=device)
-    # y = torch.cat([y, y_null], 0)
-    # model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
-    model_kwargs = dict(y=y)
+    z = torch.cat([z, z], 0)
+    y_null = torch.tensor([10] * n, device=device)
+    y = torch.cat([y, y_null], 0)
+    model_kwargs = dict(y=y, cfg_scale=args.cfg_scale)
+    # model_kwargs = dict(y=y)
 
     # Sample images:
-    # samples = diffusion.p_sample_loop(
-    #     model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
-    # )
     samples = diffusion.p_sample_loop(
-        model, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+        model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
     )
-    # samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
+    # samples = diffusion.p_sample_loop(
+    #     model, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
+    # )
+    samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
     samples = vae.decode(samples / 0.18215).sample
 
     # Save and display images:
