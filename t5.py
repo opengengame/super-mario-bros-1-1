@@ -106,9 +106,9 @@ def t5_encode_tokenized_text(
     encoded_text = encoded_text.masked_fill(~rearrange(attn_mask, '... -> ... 1'), 0.) # just force all embeddings that is padding to be equal to 0.
     return encoded_text
 
-@Cache(
-    cache_path="/data/kmei1/caches/{_hash}.pkl",
-)
+# @Cache(
+#     cache_path="/data/kmei1/caches/{_hash}.pkl",
+# )
 def t5_encode_text(
     texts: List[str],
     name = DEFAULT_T5_NAME,
