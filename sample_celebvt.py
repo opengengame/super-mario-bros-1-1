@@ -5,14 +5,14 @@ References:
 - https://github.com/facebookresearch/DiT/blob/main/sample.py
 
 Running exmaples:
-$ HF_HOME=/data/kmei1/HF_HOME CUDA_VISIBLE_DEVICES=2 python sample_celebvt.py \
+$ HF_HOME=/data/kmei1/HF_HOME CUDA_VISIBLE_DEVICES=0 python sample_celebvt.py \
     --model dit_celebvt \
     --dataset celebvt \
     --image-size 256 \
     --data-path /data/kmei1/datasets/CelebV-Text/frames \
     --ckpt results/005-dit_celebvt/checkpoints/0060000.pt \
-    --cfg-scale 8.5 \
-    --num-sampling-steps 50
+    --cfg-scale 2.5 \
+    --num-sampling-steps 10
 """
 import importlib
 import torch
@@ -25,6 +25,8 @@ import argparse
 from t5 import t5_encode_text
 from einops import rearrange
 import torchvision
+import numpy as np
+from PIL import Image
 
 
 def main(args):
@@ -72,7 +74,6 @@ def main(args):
 
     data = dataset[15]
     _, y, pos = data
-    y = ": He wears goatee and eyeglasses."
     print("generating: ", y)
     pos = torch.from_numpy(pos).to(device).unsqueeze(0)
     with torch.no_grad():

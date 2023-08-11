@@ -5,15 +5,15 @@ References:
 - https://github.com/facebookresearch/DiT/blob/main/train.py
 
 Running exmaples:
-$  HF_HOME=/data/kmei1/HF_HOME NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --master_port 29502 --nnodes=1 \
+$ HF_HOME=/data/kmei1/HF_HOME NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=1,2,6,7,8,9 torchrun --master_port 29502 --nnodes=1 \
     --node_rank=0 \
-    --nproc_per_node=4 train_celebvt.py \
+    --nproc_per_node=6 train_celebvt.py \
     --num-workers 4 \
     --model dit_celebvt \
     --dataset celebvt \
     --log-every 50 \
     --ckpt-every 1000 \
-    --global-batch-size 8 \
+    --global-batch-size 12 \
     --dataset celebvt \
     --data-path /data/kmei1/datasets/CelebV-Text/frames
 """
@@ -160,7 +160,7 @@ def main(args):
         num_heads=12,
         condition_channels=1024,
     )
-    model.load_state_dict(torch.load("results/005-dit_celebvt/checkpoints/0030000.pt", map_location="cpu")['model'], strict=False)
+    # model.load_state_dict(torch.load("results/005-dit_celebvt/checkpoints/0030000.pt", map_location="cpu")['model'], strict=False)
     # Note that parameter initialization is done within the DiT constructor
     model = DDP(model.to(device), device_ids=[rank])
     diffusion = create_diffusion(
@@ -179,7 +179,7 @@ def main(args):
     dataset = importlib.import_module(f"datasets.{args.dataset}").Dataset(
         args.data_path, 
         size=args.image_size,
-        range=[0, 4],
+        range=[64, 192],
         nframes=128,
         latent_scale=16,
     )
