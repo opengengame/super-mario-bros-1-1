@@ -5,14 +5,23 @@ References:
 - https://github.com/facebookresearch/DiT/blob/main/sample.py
 
 Running exmaples:
-$ HF_HOME=/data/kmei1/HF_HOME CUDA_VISIBLE_DEVICES=0 python sample_celebvt.py \
+$ HF_HOME=/data/kmei1/HF_HOME CUDA_VISIBLE_DEVICES=9 python sample_celebvt.py \
     --model dit_celebvt \
     --dataset celebvt \
     --image-size 256 \
     --data-path /data/kmei1/datasets/CelebV-Text/frames \
-    --ckpt results/005-dit_celebvt/checkpoints/0060000.pt \
+    --ckpt results/001-dit_celebvt/checkpoints/0080000.pt \
     --cfg-scale 2.5 \
-    --num-sampling-steps 10
+    --num-sampling-steps 50
+
+$ HF_HOME=/data/kmei1/HF_HOME CUDA_VISIBLE_DEVICES=9 python sample_celebvt.py \
+    --model dit_celebvt \
+    --dataset webvid \
+    --image-size 256 \
+    --data-path /mnt/store/kmei1/projects/video-generation/datasets/webvid/data/videos \
+    --ckpt results/011-dit_celebvt/checkpoints/0024000.pt \
+    --cfg-scale 2.5 \
+    --num-sampling-steps 50
 """
 import importlib
 import torch
@@ -67,12 +76,12 @@ def main(args):
     dataset = importlib.import_module(f"datasets.{args.dataset}").Dataset(
         args.data_path, 
         size=args.image_size,
-        range=[0, 16],
+        range=[64, 192],
         nframes=128,
         latent_scale=16,
     )
 
-    data = dataset[15]
+    data = dataset[85]
     _, y, pos = data
     print("generating: ", y)
     pos = torch.from_numpy(pos).to(device).unsqueeze(0)

@@ -5,6 +5,17 @@ References:
 - https://github.com/facebookresearch/DiT/blob/main/train.py
 
 Running exmaples:
+$ HF_HOME=/data/kmei1/HF_HOME NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --master_port 29502 --nnodes=1 \
+    --node_rank=0 \
+    --nproc_per_node=4 train_celebvt.py \
+    --num-workers 4 \
+    --model dit_celebvt \
+    --dataset webvid \
+    --log-every 50 \
+    --ckpt-every 1000 \
+    --global-batch-size 8 \
+    --data-path /mnt/store/kmei1/projects/video-generation/datasets/webvid/data/videos
+
 $ HF_HOME=/data/kmei1/HF_HOME NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=1,2,6,7,8,9 torchrun --master_port 29502 --nnodes=1 \
     --node_rank=0 \
     --nproc_per_node=6 train_celebvt.py \
@@ -160,7 +171,7 @@ def main(args):
         num_heads=12,
         condition_channels=1024,
     )
-    # model.load_state_dict(torch.load("results/005-dit_celebvt/checkpoints/0030000.pt", map_location="cpu")['model'], strict=False)
+    model.load_state_dict(torch.load("results/010-dit_celebvt/checkpoints/0048000.pt", map_location="cpu")['model'], strict=False)
     # Note that parameter initialization is done within the DiT constructor
     model = DDP(model.to(device), device_ids=[rank])
     diffusion = create_diffusion(
@@ -174,6 +185,7 @@ def main(args):
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt.load_state_dict(torch.load("results/010-dit_celebvt/checkpoints/0048000.pt", map_location="cpu")['opt'])
 
     # Setup data:
     dataset = importlib.import_module(f"datasets.{args.dataset}").Dataset(
@@ -212,7 +224,7 @@ def main(args):
 
     logger.info(f"Training for {args.epochs} epochs...")
 
-    views = 4
+    views = 8
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
