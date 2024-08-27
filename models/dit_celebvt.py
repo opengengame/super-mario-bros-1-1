@@ -217,19 +217,19 @@ class Model(nn.Module):
         nn.init.constant_(self.final_layer.linear.weight, 0)
         nn.init.constant_(self.final_layer.linear.bias, 0)
 
-    def unpatchify(self, x):
+    def unpatchify(self, x, h, w):
         """
         x: (N, T, patch_size**2 * C)
         imgs: (N, H, W, C)
         """
         c = self.out_channels
         p = self.x_embedder.patch_size[0]
-        h = w = int(x.shape[1] ** 0.5)
-        assert h * w == x.shape[1]
+        # h = w = int(x.shape[1] ** 0.5)
+        # assert h * w == x.shape[1]
 
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
+        x = x.reshape(shape=(x.shape[0], h // p, w // p, p, p, c))
         x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
+        imgs = x.reshape(shape=(x.shape[0], c, h, w))
         return imgs
 
     def forward(self, x, t, y=None, pos=None):
@@ -261,7 +261,7 @@ class Model(nn.Module):
         for block in self.blocks:
             x = block(x, c)                      # (N, T, D)
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x)                   # (N, out_channels, H, W)
+        x = self.unpatchify(x, H, W)                   # (N, out_channels, H, W)
         x = rearrange(x, "(N T) C H W -> N C T H W", T=T)
         return x
 

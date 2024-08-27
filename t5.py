@@ -3,7 +3,6 @@ import transformers
 from typing import List
 from transformers import T5Tokenizer, T5EncoderModel, T5Config
 from einops import rearrange
-from cache_decorator import Cache
 
 transformers.logging.set_verbosity_error()
 
@@ -17,7 +16,7 @@ def default(val, d):
 
 # config
 
-MAX_LENGTH = 256
+MAX_LENGTH = 160
 
 DEFAULT_T5_NAME = 'google/t5-v1_1-large'
 
