@@ -1,9 +1,4 @@
 """
-A minimal training script for DiT using PyTorch DDP.
-
-References:
-- https://github.com/facebookresearch/DiT/blob/main/train.py
-
 Running exmaples:
 $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 29502 --nnodes=1 \
     --node_rank=0 \
@@ -12,15 +7,46 @@ $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 295
     --num-workers 4 \
     --model dit_celebvt \
     --dataset celebvt \
-    --log-every 50 \
     --ckpt-every 1000 \
-    --global-batch-size 8 \
     --image-size 256 \
     --video-length 16 \
     --dataset text_video \
     --vae ema \
-    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset
+    --config-path configs/runjump_v0.yaml
 
+$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --nnodes=2 \
+    --node_rank=0 \
+    --rdzv_id=456 \
+    --rdzv_endpoint=10.99.134.90:29500 \
+    --nproc_per_node=8 \
+    train_runjump.py \
+    --num-workers 4 \
+    --model dit_celebvt \
+    --dataset celebvt \
+    --ckpt-every 1000 \
+    --image-size 256 \
+    --video-length 16 \
+    --dataset text_video \
+    --vae ema \
+    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
+    --config-path configs/runjump_v0.yaml
+
+$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --nnodes=2 \
+    --node_rank=1 \
+    --rdzv_id=456 \
+    --rdzv_endpoint=10.99.134.90:29500 \
+    --nproc_per_node=8 \
+    train_runjump.py \
+    --num-workers 4 \
+    --model dit_celebvt \
+    --dataset celebvt \
+    --ckpt-every 1000 \
+    --image-size 256 \
+    --video-length 16 \
+    --dataset text_video \
+    --vae ema \
+    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
+    --config-path configs/runjump_v0.yaml
 """
 
 import importlib
@@ -33,11 +59,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torchvision.datasets import ImageFolder
-from torchvision import transforms
-import numpy as np
 from collections import OrderedDict
-from PIL import Image
 from copy import deepcopy
 from glob import glob
 from time import time
@@ -45,11 +67,18 @@ import argparse
 import logging
 import os
 import psutil
+import torch.nn.functional as F
+
 
 from einops import rearrange
-from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 from t5 import t5_encode_text
+
+from omegaconf import OmegaConf
+
+from diffusers import DDPMScheduler
+
+from contextlib import nullcontext
 
 #################################################################################
 #                             Training Helper Functions                         #
@@ -65,8 +94,8 @@ def update_ema(ema_model, model, decay=0.9999):
 
     for name, param in model_params.items():
         name = name.replace("module.", "")
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
         ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
+
 
 @torch.no_grad()
 def update_cpu_ema(ema_model, model, decay=0.9999):
@@ -78,8 +107,8 @@ def update_cpu_ema(ema_model, model, decay=0.9999):
 
     for name, param in model_params.items():
         name = name.replace("module.", "")
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
         ema_params[name].mul_(decay).add_(param.detach().cpu().data, alpha=1 - decay)
+
 
 def requires_grad(model, flag=True):
     """
@@ -122,11 +151,12 @@ def main(args):
     """
     Trains a new DiT model.
     """
+    configs = OmegaConf.load(args.config_path)
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
 
     # Setup DDP:
     dist.init_process_group("nccl")
-    assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
+    assert configs.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
     rank = dist.get_rank()
     device = rank % torch.cuda.device_count()
     seed = args.global_seed * dist.get_world_size() + rank
@@ -150,19 +180,12 @@ def main(args):
 
     # Create model:
     model = importlib.import_module(f"models.{args.model}").Model(
-        input_size=(40, 64),
-        learn_sigma=False,
-        depth=28,
-        hidden_size=1152,
-        num_heads=16,
-        condition_channels=2048,    # useless here
-        patch_size=2,
-        use_y_embedder=False,
+        **configs.get("model", {})
     )
 
     # mismatching loading
     _current_model = model.state_dict()
-    keys_vin = torch.load("results/DiT-XL-2-256x256.pt", map_location="cpu")
+    keys_vin = torch.load("results/DiT-XL-2-256x256.pt", map_location="cpu", weights_only=False)
     new_state_dict={k:v if v.size()==_current_model[k].size() else _current_model[k] for k,v in zip(_current_model.keys(), keys_vin.values())}
     model.load_state_dict(new_state_dict, strict=False)
 
@@ -170,31 +193,22 @@ def main(args):
     requires_grad(ema, False)
 
     # Note that parameter initialization is done within the DiT constructor
-    model = DDP(model.to(device), device_ids=[rank])
-    diffusion = create_diffusion(
-        timestep_respacing="",
-        predict_xstart=True,
-        learn_sigma=False,
-        sigma_small=True
-    )  # default: 1000 steps, linear noise schedule
+    local_rank = int(os.environ["LOCAL_RANK"])
+    model = DDP(model.to(device), device_ids=[local_rank], output_device=local_rank)
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}", torch_dtype=torch.float16).to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=configs.learning_rate, weight_decay=0)
     # opt.load_state_dict(torch.load("results/010-dit_celebvt/checkpoints/0048000.pt", map_location="cpu")['opt'])
 
+    # diffusion related logics
+    noise_scheduler = DDPMScheduler(**configs.get("noise_scheduler", {}))
+
     # Setup data:
+    data_config = configs.get("data", {})
     dataset = importlib.import_module(f"datasets.{args.dataset}").Dataset(
-        args.data_path, 
-        args.image_size,
-        video_length=args.video_length,
-        dataset_name="UCF-101",
-        subset_split="train",
-        clip_step=1,
-        temporal_transform="rand_clips",
-        cfg_random_null_text_ratio=0.1,
-        latent_scale=16,
+        **configs.get("dataset", {})
     )
     sampler = DistributedSampler(
         dataset,
@@ -205,18 +219,25 @@ def main(args):
     )
     loader = DataLoader(
         dataset,
-        batch_size=int(args.global_batch_size // dist.get_world_size()),
+        batch_size=int(configs.global_batch_size // dist.get_world_size()),
         shuffle=False,
         sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
+    logger.info(f"Dataset contains {len(dataset):,} images")
 
     # Prepare models for training:
     update_cpu_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
+
+    def lr_lambda(current_step: int):
+        if current_step < configs.warmup_steps:
+            return float(current_step) / float(max(1, configs.warmup_steps))
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -227,74 +248,105 @@ def main(args):
     logger.info(f"Training for {args.epochs} epochs...")
 
     scaler = torch.GradScaler()
-    for epoch in range(args.epochs):
-        sampler.set_epoch(epoch)
-        logger.info(f"Beginning epoch {epoch}...")
-        for idx, data in enumerate(loader):
-            x, y, pos = data
+    # with torch.profiler.profile(
+    # schedule=torch.profiler.schedule(
+    #     wait=2,
+    #     warmup=2,
+    #     active=6,
+    #     repeat=1),
+    # on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+    # with_stack=False
+    # ) as profiler:
+    with nullcontext():
+        for epoch in range(args.epochs):
+            sampler.set_epoch(epoch)
+            logger.info(f"Beginning epoch {epoch}...")
+            for data in loader:
+                opt.zero_grad()
 
-            x = x.to(device)
-            pos = pos.to(device)
+                x, y, pos = data
+                bsz = x.shape[0]
 
-            with torch.no_grad():
-                # Map input images to latent space + normalize latents:
-                # y = t5_encode_text(y).to(torch.float32)
-                # if np.random.rand() < 0.1:
-                #     y = t5_encode_text([""]).to(torch.float32)
-                x = rearrange(x, "N C T H W -> (N T) C H W")
+                x = x.to(device)
+                pos = pos.to(device)
+
+                with torch.no_grad():
+                    x = rearrange(x, "N C T H W -> (N T) C H W")
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+                    x = rearrange(x, "(N T) C H W -> N C T H W", T=args.video_length)
+
+                noise = torch.randn_like(x)
+                timesteps = torch.randint(
+                    0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device
+                )
+                noisy_model_input = noise_scheduler.add_noise(x, noise, timesteps)
+
+                first_frame = x[:, :, :1]
+                first_pos = pos[:, :, :1]
                 with torch.autocast(device_type='cuda', dtype=torch.float16):
-                    x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-                x = rearrange(x, "(N T) C H W -> N C T H W", T=args.video_length)
-                # x = x.float()           # cast back to float from float16 vae
+                    model_pred = model(
+                        noisy_model_input,
+                        timesteps,
+                        pos=pos,
+                        first_frame=first_frame,
+                        first_pos=first_pos
+                    )
 
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            # pos = torch.cat([pos, pos[:, :1]], dim=1)
-            # print("===>", x.shape, pos.shape)
-            model_kwargs = dict(y=None, pos=pos, first_frame=x[:,:,:1], first_pos=pos[:, :, :1])
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        target = noise_scheduler.get_velocity(x, noise, timesteps)
+                    elif noise_scheduler.config.prediction_type == "sample":
+                        target = x
+                        model_pred = model_pred - noise
+                    else:
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean()
+                    loss = torch.mean((target - model_pred) ** 2)
 
-            opt.zero_grad()
-            scaler.scale(loss).backward()
-            scaler.step(opt)
-            scaler.update()
-            if idx % args.ema_iter == 0:
-                update_cpu_ema(ema, model, decay=math.pow(0.999, args.ema_iter))
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
+                scheduler.step()
+                # profiler.step()
 
-            # Log loss values:
-            running_loss += loss.item()
-            log_steps += 1
-            train_steps += 1
-            if train_steps % args.log_every == 0:
-                # Measure training speed:
-                torch.cuda.synchronize()
-                end_time = time()
-                steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
-                logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
-                # Reset monitoring variables:
-                running_loss = 0
-                log_steps = 0
-                start_time = time()
+                if train_steps % configs.ema_iter == 0:
+                    update_cpu_ema(ema, model, decay=math.pow(0.999, configs.ema_iter))
 
-            # Save DiT checkpoint:
-            if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                if rank == 0:
-                    checkpoint = {
-                        "model": model.module.state_dict(),
-                        "ema": ema.state_dict(),
-                        "opt": opt.state_dict(),
-                        "args": args
-                    }
-                    checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
-                    torch.save(checkpoint, checkpoint_path)
-                    logger.info(f"Saved checkpoint to {checkpoint_path}")
-                dist.barrier()
+                # Log loss values:
+                running_loss += loss.item()
+                log_steps += 1
+                train_steps += 1
+                if train_steps % configs.log_every == 0:
+                    # Measure training speed:
+                    torch.cuda.synchronize()
+                    end_time = time()
+                    steps_per_sec = log_steps / (end_time - start_time)
+                    # Reduce loss history over all processes:
+                    avg_loss = torch.tensor(running_loss / log_steps, device=device)
+                    dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                    avg_loss = avg_loss.item() / dist.get_world_size()
+                    dynamic_lr = opt.param_groups[0]["lr"]
+                    logger.info(f"(step={train_steps:07d}) Train LR: {dynamic_lr:.6f} Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                    # Reset monitoring variables:
+                    running_loss = 0
+                    log_steps = 0
+                    start_time = time()
+
+                # Save DiT checkpoint:
+                if train_steps % args.ckpt_every == 0 and train_steps > 0:
+                    if rank == 0:
+                        checkpoint = {
+                            "model": model.module.state_dict(),
+                            "ema": ema.state_dict(),
+                            "opt": opt.state_dict(),
+                            "args": args
+                        }
+                        checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
+                        torch.save(checkpoint, checkpoint_path)
+                        logger.info(f"Saved checkpoint to {checkpoint_path}")
+                    dist.barrier()
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
@@ -306,7 +358,7 @@ def main(args):
 if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", type=str, required=True)
+    parser.add_argument("--config-path", type=str, required=True)
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--dataset", type=str, default="cifar10")
@@ -314,12 +366,9 @@ if __name__ == "__main__":
     parser.add_argument("--video-length", type=int, default=16)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=1400)
-    parser.add_argument("--global-batch-size", type=int, default=256)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=2_000)
-    parser.add_argument("--ema-iter", type=int, default=10)
     args = parser.parse_args()
     main(args)

@@ -10,7 +10,7 @@ $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 python sample_runjump.py \
     --dataset text_video \
     --image-size 256 \
     --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
-    --ckpt results/007-dit_celebvt/checkpoints/0003000.pt \
+    --ckpt results/007-dit_celebvt/checkpoints/0004000.pt \
     --num-sampling-steps 50
 """
 import importlib
