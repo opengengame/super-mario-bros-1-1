@@ -18,7 +18,7 @@ def default(val, d):
 
 MAX_LENGTH = 160
 
-DEFAULT_T5_NAME = 'google/t5-v1_1-large'
+DEFAULT_T5_NAME = 'google/t5-v1_1-xl'
 
 T5_CONFIGS = {}
 
@@ -29,7 +29,7 @@ def get_tokenizer(name):
     return tokenizer
 
 def get_model(name):
-    model = T5EncoderModel.from_pretrained(name)
+    model = T5EncoderModel.from_pretrained(name, torch_dtype=torch.bfloat16)
     return model
 
 def get_model_and_tokenizer(name):
@@ -97,6 +97,7 @@ def t5_encode_tokenized_text(
     t5.eval()
 
     with torch.no_grad():
+        # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
         output = t5(input_ids = token_ids, attention_mask = attn_mask)
         encoded_text = output.last_hidden_state.detach()
 

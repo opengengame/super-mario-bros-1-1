@@ -8,7 +8,12 @@ import numpy as np
 import torch
 import torch.utils.data.dataset as torch_dataset
 import torchvision.transforms as transforms
-import torchvision.transforms._transforms_video as transforms_video
+
+import warnings
+with warnings.catch_warnings(record=True):
+    warnings.simplefilter("always")
+    import torchvision.transforms._transforms_video as transforms_video
+# import torchvision.transforms._transforms_video as transforms_video
 
 """ VideoFrameDataset """
 

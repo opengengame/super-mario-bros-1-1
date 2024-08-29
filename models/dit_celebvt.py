@@ -168,6 +168,8 @@ class Model(nn.Module):
         self.patch_size = patch_size
         self.num_heads = num_heads
         self.hidden_size = hidden_size
+        # self.cross_atten_size = cross_atten_size
+        self.use_y_embedder = use_y_embedder
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size)
         if use_y_embedder:
@@ -199,8 +201,9 @@ class Model(nn.Module):
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
 
-        nn.init.constant_(self.y_embedder.weight, 0)
-        nn.init.constant_(self.y_embedder.bias, 0)
+        if self.use_y_embedder:
+            nn.init.constant_(self.y_embedder.weight, 0)
+            nn.init.constant_(self.y_embedder.bias, 0)
 
         # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
@@ -232,37 +235,67 @@ class Model(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h, w))
         return imgs
 
-    def forward(self, x, t, y=None, pos=None):
+    def ckpt_wrapper(self, module):
+        def ckpt_forward(*inputs):
+            outputs = module(*inputs)
+            return outputs
+        return ckpt_forward
+
+    def forward(self, x, t, y=None, pos=None, first_frame=None, first_pos=None):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
+
+        # print("<==========", x.shape, first_frame.shape, pos.shape)
+
+        x = torch.cat([x, first_frame], dim=2)
+        pos = torch.cat([pos, first_pos], dim=2)
+
         N, _, T, H, W = x.shape
+
         x = rearrange(x, "N C T H W -> (N T) C H W")
         x = self.x_embedder(x)  # (N, T, D), where T = H * W / patch_size ** 2
+        # print("<==========", x.shape, pos.shape, first_frame.shape, first_pos.shape)
         with torch.no_grad():
             pos_emb = get_nd_sincos_pos_embed_from_grid(self.hidden_size, pos).detach()
         pos_emb = rearrange(pos_emb, "(N T Z) D -> (N T) Z D", N=N, T=T)
+        # print("==========>", x.shape, pos_emb.shape)
         x = x + pos_emb
+
+        # put t back
+        x = rearrange(x, "(N T) Z D -> N (T Z) D", N=N)
 
         t = self.t_embedder(t)                   # (N, D)
 
         c = t.unsqueeze(1).repeat(1, x.shape[1], 1)
 
         if y is not None:
-            y = self.y_embedder(y)                   # (N, D)
+            if self.use_y_embedder:
+                y = self.y_embedder(y)                   # (N, D)
+            # print("========>", c.shape, y.shape)
             c = c + y                                # (N, D)
 
         # !!! don't confuse with torch.Tensor.repeat() !!!
         # https://pytorch.org/docs/stable/generated/torch.repeat_interleave.html
-        c = rearrange(c.unsqueeze(1).repeat(1, T, 1, 1), 'N T Z D -> (N T) Z D')
+        # c = rearrange(c.unsqueeze(1).repeat(1, T + 1, 1, 1), 'N T Z D -> N (T Z) D')
+        # print("==========>", x.shape, c.shape)
         for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
+            # x = block(x, c)                      # (N, T, D)
+            x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)       # (N, T, D)
+
+        # print("x======>", x.shape, c.shape)
+
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x, H, W)                   # (N, out_channels, H, W)
-        x = rearrange(x, "(N T) C H W -> N C T H W", T=T)
+        
+        x = x[:, :(x.shape[1] // T * (T - 1))]        # simply ignore the condition
+        # print("x======>", x.shape, c.shape)
+        x = rearrange(x, "N (T Z) D -> (N T) Z D", T=T-1)
+        x = self.unpatchify(x, H, W)                    # (N, out_channels, H, W)
+        # print("x======>", x.shape, c.shape)
+        x = rearrange(x, "(N T) C H W -> N C T H W", T=T-1)
         return x
 
     def forward_with_cfg(self, x, t, y, pos, cfg_scale):

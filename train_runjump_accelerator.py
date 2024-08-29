@@ -21,10 +21,66 @@ $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 295
     --vae ema \
     --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset
 
+$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 accelerate launch --multi_gpu \
+    --num_processes 8 \
+    --mixed_precision fp16 train_runjump.py \
+    --num-workers 4 \
+    --model dit_celebvt \
+    --dataset celebvt \
+    --log-every 50 \
+    --ckpt-every 1000 \
+    --global-batch-size 8 \
+    --image-size 256 \
+    --video-length 16 \
+    --dataset text_video \
+    --vae ema \
+    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset
+
+$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 accelerate launch --multi_gpu \
+    --num_machines 2 \
+    --same_network \
+    --num_processes 8 \
+    --machine_rank 0 \
+    --main_process_ip 10.99.134.98 \
+    --main_process_port 29500 \
+    --mixed_precision fp16 \
+    train_runjump.py \
+    --num-workers 4 \
+    --model dit_celebvt \
+    --dataset celebvt \
+    --log-every 50 \
+    --ckpt-every 1000 \
+    --global-batch-size 16 \
+    --image-size 256 \
+    --video-length 16 \
+    --dataset text_video \
+    --vae ema \
+    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset
+
+$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 accelerate launch --multi_gpu \
+    --num_machines 2 \
+    --same_network \
+    --num_processes 8 \
+    --machine_rank 1 \
+    --main_process_ip 10.99.134.98 \
+    --main_process_port 29500 \
+    --mixed_precision fp16 \
+    train_runjump.py \
+    --num-workers 4 \
+    --model dit_celebvt \
+    --dataset celebvt \
+    --log-every 50 \
+    --ckpt-every 1000 \
+    --global-batch-size 16 \
+    --image-size 256 \
+    --video-length 16 \
+    --dataset text_video \
+    --vae ema \
+    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset
+
 """
 
 import importlib
-import math
 import torch
 # the first flag below was False when we tested this script but True makes A100 training a lot faster:
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -51,6 +107,8 @@ from diffusion import create_diffusion
 from diffusers.models import AutoencoderKL
 from t5 import t5_encode_text
 
+from accelerate import Accelerator
+
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
@@ -68,18 +126,6 @@ def update_ema(ema_model, model, decay=0.9999):
         # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
         ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
 
-@torch.no_grad()
-def update_cpu_ema(ema_model, model, decay=0.9999):
-    """
-    Step the EMA model towards the current model.
-    """
-    ema_params = OrderedDict(ema_model.named_parameters())
-    model_params = OrderedDict(model.named_parameters())
-
-    for name, param in model_params.items():
-        name = name.replace("module.", "")
-        # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
-        ema_params[name].mul_(decay).add_(param.detach().cpu().data, alpha=1 - decay)
 
 def requires_grad(model, flag=True):
     """
@@ -124,18 +170,23 @@ def main(args):
     """
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
 
+    # Setup accelerator:
+    accelerator = Accelerator()
+    device = accelerator.device
+
     # Setup DDP:
-    dist.init_process_group("nccl")
-    assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
-    rank = dist.get_rank()
-    device = rank % torch.cuda.device_count()
-    seed = args.global_seed * dist.get_world_size() + rank
-    torch.manual_seed(seed)
-    torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
+    # dist.init_process_group("nccl")
+    # assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
+    # rank = dist.get_rank()
+    # device = rank % torch.cuda.device_count()
+    # seed = args.global_seed * dist.get_world_size() + rank
+    # torch.manual_seed(seed)
+    # torch.cuda.set_device(device)
+    # print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
 
     # Setup an experiment folder:
-    if rank == 0:
+    # if rank == 0:
+    if accelerator.is_main_process:
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
         experiment_index = len(glob(f"{args.results_dir}/*"))
         model_string_name = args.model
@@ -152,32 +203,27 @@ def main(args):
     model = importlib.import_module(f"models.{args.model}").Model(
         input_size=(40, 64),
         learn_sigma=False,
-        depth=28,
+        depth=20,
         hidden_size=1152,
-        num_heads=16,
+        num_heads=8,
         condition_channels=2048,    # useless here
-        patch_size=2,
+        patch_size=4,
         use_y_embedder=False,
     )
-
-    # mismatching loading
-    _current_model = model.state_dict()
-    keys_vin = torch.load("results/DiT-XL-2-256x256.pt", map_location="cpu")
-    new_state_dict={k:v if v.size()==_current_model[k].size() else _current_model[k] for k,v in zip(_current_model.keys(), keys_vin.values())}
-    model.load_state_dict(new_state_dict, strict=False)
-
+    # model = model.to(device)
     ema = deepcopy(model)           # Create an EMA of the model for use after training
     requires_grad(ema, False)
 
+    # model.load_state_dict(torch.load("results/010-dit_celebvt/checkpoints/0048000.pt", map_location="cpu")['model'], strict=False)
     # Note that parameter initialization is done within the DiT constructor
-    model = DDP(model.to(device), device_ids=[rank])
+    # model = DDP(model.to(device), device_ids=[rank])
     diffusion = create_diffusion(
         timestep_respacing="",
         predict_xstart=True,
         learn_sigma=False,
         sigma_small=True
     )  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}", torch_dtype=torch.float16).to(device)
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # Setup optimizer (we used default Adam betas=(0.9, 0.999) and a constant learning rate of 1e-4 in our paper):
@@ -194,20 +240,20 @@ def main(args):
         clip_step=1,
         temporal_transform="rand_clips",
         cfg_random_null_text_ratio=0.1,
-        latent_scale=16,
+        latent_scale=32,
     )
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=dist.get_world_size(),
-        rank=rank,
-        shuffle=True,
-        seed=args.global_seed
-    )
+    # sampler = DistributedSampler(
+    #     dataset,
+    #     num_replicas=dist.get_world_size(),
+    #     rank=rank,
+    #     shuffle=True,
+    #     seed=args.global_seed
+    # )
     loader = DataLoader(
         dataset,
-        batch_size=int(args.global_batch_size // dist.get_world_size()),
-        shuffle=False,
-        sampler=sampler,
+        batch_size=int(args.global_batch_size // accelerator.num_processes),
+        shuffle=True,
+        # sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True
@@ -215,8 +261,12 @@ def main(args):
     logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
 
     # Prepare models for training:
-    update_cpu_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
+    update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
+    model, opt, loader = accelerator.prepare(model, opt, loader)
+
+    model.to(device)
+    ema.to(device)
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -224,13 +274,14 @@ def main(args):
     running_loss = 0
     start_time = time()
 
-    logger.info(f"Training for {args.epochs} epochs...")
+    if accelerator.is_main_process:
+        logger.info(f"Training for {args.epochs} epochs...")
 
-    scaler = torch.GradScaler()
+    # scaler = torch.GradScaler()
     for epoch in range(args.epochs):
-        sampler.set_epoch(epoch)
+        # sampler.set_epoch(epoch)
         logger.info(f"Beginning epoch {epoch}...")
-        for idx, data in enumerate(loader):
+        for data in loader:
             x, y, pos = data
 
             x = x.to(device)
@@ -242,26 +293,27 @@ def main(args):
                 # if np.random.rand() < 0.1:
                 #     y = t5_encode_text([""]).to(torch.float32)
                 x = rearrange(x, "N C T H W -> (N T) C H W")
-                with torch.autocast(device_type='cuda', dtype=torch.float16):
-                    x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+                x = vae.encode(x).latent_dist.sample().mul_(0.18215)
                 x = rearrange(x, "(N T) C H W -> N C T H W", T=args.video_length)
-                # x = x.float()           # cast back to float from float16 vae
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             # pos = torch.cat([pos, pos[:, :1]], dim=1)
             # print("===>", x.shape, pos.shape)
             model_kwargs = dict(y=None, pos=pos, first_frame=x[:,:,:1], first_pos=pos[:, :, :1])
 
-            with torch.autocast(device_type='cuda', dtype=torch.float16):
-                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+            # with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean()
-
             opt.zero_grad()
-            scaler.scale(loss).backward()
-            scaler.step(opt)
-            scaler.update()
-            if idx % args.ema_iter == 0:
-                update_cpu_ema(ema, model, decay=math.pow(0.999, args.ema_iter))
+            accelerator.backward(loss)
+            opt.step()
+            update_ema(ema, model)
+
+            # loss.backward()
+            # scaler.scale(loss).backward()
+            # opt.step()
+            # scaler.step(opt)
+            # scaler.update()
 
             # Log loss values:
             running_loss += loss.item()
@@ -274,8 +326,8 @@ def main(args):
                 steps_per_sec = log_steps / (end_time - start_time)
                 # Reduce loss history over all processes:
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
+                # dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+                avg_loss = avg_loss.item() / accelerator.num_processes
                 logger.info(f"(step={train_steps:07d}) Train Loss: {avg_loss:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
                 # Reset monitoring variables:
                 running_loss = 0
@@ -284,23 +336,22 @@ def main(args):
 
             # Save DiT checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
-                if rank == 0:
+                if accelerator.is_main_process:
                     checkpoint = {
                         "model": model.module.state_dict(),
-                        "ema": ema.state_dict(),
                         "opt": opt.state_dict(),
                         "args": args
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
                     logger.info(f"Saved checkpoint to {checkpoint_path}")
-                dist.barrier()
+                # dist.barrier()
 
     model.eval()  # important! This disables randomized embedding dropout
     # do any sampling/FID calculation/etc. with ema (or model) in eval mode ...
 
     logger.info("Done!")
-    cleanup()
+    # cleanup()
 
 
 if __name__ == "__main__":
@@ -320,6 +371,5 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--ckpt-every", type=int, default=2_000)
-    parser.add_argument("--ema-iter", type=int, default=10)
     args = parser.parse_args()
     main(args)
