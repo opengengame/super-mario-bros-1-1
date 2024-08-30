@@ -5,7 +5,7 @@ noise_scheduler:
   beta_end: 0.012
   beta_schedule: scaled_linear
   clip_sample: false
-  prediction_type: epsilon
+  prediction_type: v_prediction
   rescale_betas_zero_snr: true
   steps_offset: 1
 
@@ -56,6 +56,7 @@ dataset:
 
 ema_iter: 100
 log_every: 10
-warmup_steps: 100
+warmup_steps: 200
 global_batch_size: 8
-learning_rate: 0.00004
+learning_rate: 2e-5
+iters_to_accumulate: 2

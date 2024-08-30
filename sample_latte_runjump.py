@@ -10,7 +10,7 @@ $ CUDA_VISIBLE_DEVICES=0 HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 pyt
     --dataset text_video \
     --image-size 256 \
     --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
-    --ckpt results/028/checkpoints/0001000.pt \
+    --ckpt results/001/checkpoints/0007500.pt \
     --num-sampling-steps 20 \
     --config-path configs/runjump_latte_v0.yaml
 """
@@ -45,13 +45,13 @@ def main(args):
         **configs.get("model", {})
     ).to(device)
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
-    # checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
-    # # checkpoint = checkpoint["ema"] if "ema" in checkpoint else checkpoint["model"]
+    checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
+    checkpoint = checkpoint["ema"] if "ema" in checkpoint else checkpoint["model"]
     # checkpoint = checkpoint["model"]
-    # model.load_state_dict(checkpoint)
-    with open("results/open_sora_v1_1_f64.safetensors", "rb") as f:
-        data = f.read()
-    model.load_state_dict(safetensors_load(data), strict=False)
+    model.load_state_dict(checkpoint)
+    # with open("results/open_sora_v1_1_f64.safetensors", "rb") as f:
+    #     data = f.read()
+    # model.load_state_dict(safetensors_load(data), strict=False)
     model.eval()  # important!
     model = model.to(device, dtype=torch.float16)
     # model.to()
@@ -64,7 +64,7 @@ def main(args):
         **configs.get("dataset", {})
     )
 
-    data = dataset[0]
+    data = dataset[11]
     x, y, pos = data
 
     z = torch.randn(1, 4, 16, 40, 64, device=device, dtype=x.dtype)

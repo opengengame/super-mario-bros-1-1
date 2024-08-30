@@ -235,7 +235,6 @@ def main(args):
             sampler.set_epoch(epoch)
             logger.info(f"Beginning epoch {epoch}...")
             for data in loader:
-                opt.zero_grad()
 
                 x, y, pos = data
                 bsz = x.shape[0]
@@ -276,13 +275,14 @@ def main(args):
                     loss = torch.mean((target - model_pred) ** 2)
 
                 scaler.scale(loss).backward()
-                scaler.step(opt)
-                scaler.update()
+                if (train_steps + 1) % configs.iters_to_accumulate == 0:
+                    scaler.step(opt)
+                    scaler.update()
+                    opt.zero_grad()
+                    scheduler.step()
                 # loss.backward()
                 # opt.step()
                 # profiler.step()
-
-                scheduler.step()
 
                 if train_steps % configs.ema_iter == 0:
                     update_cpu_ema(ema, model, decay=math.pow(0.999, configs.ema_iter))
