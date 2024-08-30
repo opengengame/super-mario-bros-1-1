@@ -18,6 +18,7 @@ def default(val, d):
 
 MAX_LENGTH = 300
 
+# DEFAULT_T5_NAME = 'google/t5-v1_1-xxl'
 DEFAULT_T5_NAME = 'google/t5-v1_1-xl'
 
 T5_CONFIGS = {}

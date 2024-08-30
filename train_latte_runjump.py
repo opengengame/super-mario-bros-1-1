@@ -6,7 +6,7 @@ $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 295
     train_latte_runjump.py \
     --num-workers 4 \
     --dataset celebvt \
-    --ckpt-every 1000 \
+    --ckpt-every 500 \
     --image-size 256 \
     --video-length 16 \
     --dataset text_video \
@@ -153,14 +153,12 @@ def main(args):
         **configs.get("model", {})
     )
     model.gradient_checkpointing = True
+
+    # mismatching loading
     with open("results/open_sora_v1_1_f64.safetensors", "rb") as f:
         data = f.read()
     keys_vin = safetensors_load(data)
-    # model.load_state_dict(state_dict, strict=False)
-
-    # mismatching loading
     _current_model = model.state_dict()
-    # keys_vin = torch.load("results/DiT-XL-2-256x256.pt", map_location="cpu", weights_only=False)
     new_state_dict={k:v if v.size()==_current_model[k].size() else _current_model[k] for k,v in zip(_current_model.keys(), keys_vin.values())}
     model.load_state_dict(new_state_dict, strict=False)
 
@@ -262,7 +260,7 @@ def main(args):
                         encoder_hidden_states=y,
                         timestep=timesteps,
                         added_cond_kwargs={"resolution": None, "aspect_ratio": None},
-                        enable_temporal_attentions=False,
+                        enable_temporal_attentions=True,
                         return_dict=False
                     )[0]
                     if noise_scheduler.config.prediction_type == "epsilon":
