@@ -16,7 +16,7 @@ def default(val, d):
 
 # config
 
-MAX_LENGTH = 160
+MAX_LENGTH = 300
 
 DEFAULT_T5_NAME = 'google/t5-v1_1-xl'
 

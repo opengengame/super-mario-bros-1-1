@@ -10,15 +10,17 @@ $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 python sample_runjump.py \
     --dataset text_video \
     --image-size 256 \
     --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
-    --ckpt results/007-dit_celebvt/checkpoints/0004000.pt \
-    --num-sampling-steps 50
+    --ckpt results/009-dit_celebvt/checkpoints/0010000.pt \
+    --num-sampling-steps 20 \
+    --config-path configs/runjump_base_v0.yaml
 """
 import importlib
 import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 from torchvision.utils import save_image
-from diffusion import create_diffusion
+# from diffusion import create_diffusion
+from diffusers import DDIMScheduler
 from diffusers.models import AutoencoderKL
 import argparse
 from t5 import t5_encode_text
@@ -26,105 +28,91 @@ from einops import rearrange
 import torchvision
 import numpy as np
 from PIL import Image
-
+from omegaconf import OmegaConf
+from tqdm import tqdm
 
 def main(args):
     # Setup PyTorch:
+    configs = OmegaConf.load(args.config_path)
     torch.manual_seed(args.seed)
     torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load model:
     latent_size = args.image_size // 8
-    # model = importlib.import_module(f"models.{args.model}").Model(
-    #     input_size=(40, 64),
-    #     learn_sigma=False,
-    #     depth=20,
-    #     hidden_size=1152,
-    #     num_heads=8,
-    #     condition_channels=2048,    # useless here
-    #     patch_size=4,
-    #     use_y_embedder=False,
-    # ).to(device)
     model = importlib.import_module(f"models.{args.model}").Model(
-        input_size=(40, 64),
-        learn_sigma=False,
-        depth=28,
-        hidden_size=1152,
-        num_heads=16,
-        condition_channels=2048,    # useless here
-        patch_size=4,
-        use_y_embedder=False,
+        **configs.get("model", {})
     ).to(device)
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
     checkpoint = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     checkpoint = checkpoint["ema"] if "ema" in checkpoint else checkpoint["model"]
+    # checkpoint = checkpoint["model"]
     model.load_state_dict(checkpoint)
     model.eval()  # important!
-    model.to(device)
+    model = model.to(device, dtype=torch.float16)
+    # model.to()
 
-    diffusion = create_diffusion(
-        timestep_respacing=str(args.num_sampling_steps),
-        predict_xstart=True,
-        learn_sigma=False,
-        sigma_small=True
-    )  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
+    noise_scheduler = DDIMScheduler(**configs.get("noise_scheduler", {}))
+
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}", torch_dtype=torch.float16).to(device)
 
     dataset = importlib.import_module(f"datasets.{args.dataset}").Dataset(
-        args.data_path, 
-        256,                                # not useful
-        video_length=16,
-        dataset_name="UCF-101",
-        subset_split="train",
-        clip_step=1,
-        temporal_transform="rand_clips",
-        cfg_random_null_text_ratio=0.0,
-        latent_scale=32,
+        **configs.get("dataset", {})
     )
 
-    data = dataset[12]
+    data = dataset[0]
     x, _, pos = data
-    # print("generating: ", y)
     pos = torch.from_numpy(pos).to(device).unsqueeze(0)
-    # with torch.no_grad():
-    #     y = t5_encode_text([y])
-    #     y_null = t5_encode_text([""])
+
+    x = x[None].to(device).to(torch.float16)
+    with torch.no_grad():
+        x = rearrange(x, "N C T H W -> (N T) C H W")
+        x = vae.encode(x).latent_dist.sample().mul_(0.18215)
+        x = rearrange(x, "(N T) C H W -> N C T H W", T=16)
 
     N, _, T = pos.shape[:3]
-    z = torch.randn(N, 4, 16, 40, 64, device=device)
-    # z = torch.cat(pos.shape[2] * [z], 2)
+    z = torch.randn(N, 4, 16, 40, 64, device=device, dtype=x.dtype)
 
-    # Setup classifier-free guidance:
-    # y = torch.cat([y, y_null], 0)
-    # z = torch.cat([z, z], 0)
-    # pos = torch.cat([pos, pos], 0)
-    with torch.no_grad():
-        first_frame = x[None, :, 0].to(device)       # rearrange(x, "N C T H W -> (N T) C H W")
-        # print("======>", x.shape, first_frame.shape)
-        first_frame = vae.encode(first_frame).latent_dist.sample().mul_(0.18215)
-        first_frame = first_frame[:, :, None]
+    # with torch.no_grad():
+    #     first_frame = x[None, :, 0].to(device)       # rearrange(x, "N C T H W -> (N T) C H W")
+    #     first_frame = vae.encode(first_frame).latent_dist.sample().mul_(0.18215)
+    #     first_frame = first_frame[:, :, None]
 
-    model_kwargs = dict(y=None, pos=pos.to(device), first_frame=first_frame.to(device), first_pos=pos[:, :, :1].to(device))
+    first_frame = x[:, :, :1]
+    first_pos = pos[:, :, :1]
 
-    # Sample images:
-    # samples = diffusion.p_sample_loop(
-    #     model.forward_with_cfg, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
-    # )
-    samples = diffusion.p_sample_loop(
-        model, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=True, device=device
-    )
-    # samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
-    T = samples.shape[2]
-    _samples = rearrange(samples, "N C T H W -> (N T) C H W")
-    with torch.no_grad():
-        samples = []
-        for frame in _samples:
-            samples.append(vae.decode(frame.unsqueeze(0) / 0.18215).sample)
-        samples = torch.cat(samples)
-    samples = torch.clamp(samples, -1, 1)
+    dtype = z.dtype
+    noise_scheduler.set_timesteps(args.num_sampling_steps, device=device)
+    timesteps = noise_scheduler.timesteps
+    # pos = pos.to(dtype)
+    # first_frame = first_frame.to(dtype)
+    # first_pos = first_pos.to(dtype)
 
-    samples = samples.cpu()
+    latent_model_input = z
+    with torch.autocast(device_type='cuda', dtype=torch.float16):
+        for t in tqdm(timesteps):
+            latent_model_input = noise_scheduler.scale_model_input(latent_model_input, t)
+            with torch.no_grad():
+                noise_pred = model(
+                    latent_model_input,
+                    t[None],
+                    pos=pos,
+                    first_frame=first_frame,
+                    first_pos=first_pos
+                )[0]
+            latent_model_input = noise_scheduler.step(noise_pred, t, latent_model_input, return_dict=False)[0]
+        samples = latent_model_input
+
+        _samples = rearrange(samples, "N C T H W -> (N T) C H W")
+        with torch.no_grad():
+            samples = []
+            for frame in _samples:
+                samples.append(vae.decode(frame.unsqueeze(0) / 0.18215).sample)
+            samples = torch.cat(samples)
+        samples = torch.clamp(samples, -1, 1)
+
+    samples = samples.detach().cpu()
+
     print("samples", samples.shape)
 
     # Save samples to disk as individual .png files
@@ -132,7 +120,7 @@ def main(args):
     video = 255 * (samples.clip(-1, 1) / 2 + 0.5)
     torchvision.io.write_video(
         f"samples.mp4",
-        video.detach().permute(0, 2, 3, 1).numpy(),
+        video.permute(0, 2, 3, 1).numpy(),
         fps=18,
         video_codec="h264",
     )
@@ -140,6 +128,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config-path", type=str, required=True)
     parser.add_argument("--data-path", type=str, required=True)
     parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--dataset", type=str, default="cifar10")

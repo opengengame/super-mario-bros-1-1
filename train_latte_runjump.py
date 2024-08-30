@@ -3,50 +3,15 @@ Running exmaples:
 $ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 29502 --nnodes=1 \
     --node_rank=0 \
     --nproc_per_node=8 \
-    train_runjump.py \
+    train_latte_runjump.py \
     --num-workers 4 \
-    --model dit_celebvt \
     --dataset celebvt \
     --ckpt-every 1000 \
     --image-size 256 \
     --video-length 16 \
     --dataset text_video \
     --vae ema \
-    --config-path configs/runjump_v0.yaml
-
-$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --nnodes=2 \
-    --node_rank=0 \
-    --rdzv_id=456 \
-    --rdzv_endpoint=10.99.134.90:29500 \
-    --nproc_per_node=8 \
-    train_runjump.py \
-    --num-workers 4 \
-    --model dit_celebvt \
-    --dataset celebvt \
-    --ckpt-every 1000 \
-    --image-size 256 \
-    --video-length 16 \
-    --dataset text_video \
-    --vae ema \
-    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
-    --config-path configs/runjump_v0.yaml
-
-$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --nnodes=2 \
-    --node_rank=1 \
-    --rdzv_id=456 \
-    --rdzv_endpoint=10.99.134.90:29500 \
-    --nproc_per_node=8 \
-    train_runjump.py \
-    --num-workers 4 \
-    --model dit_celebvt \
-    --dataset celebvt \
-    --ckpt-every 1000 \
-    --image-size 256 \
-    --video-length 16 \
-    --dataset text_video \
-    --vae ema \
-    --data-path /mnt/store/kmei1/projects/t1/datasets/godmodeanimation_runjump/runjump_dataset \
-    --config-path configs/runjump_v0.yaml
+    --config-path configs/runjump_latte_v0.yaml
 """
 
 import importlib
@@ -79,6 +44,12 @@ from omegaconf import OmegaConf
 from diffusers import DDPMScheduler
 
 from contextlib import nullcontext
+
+from models.modeling_latte import LatteT2V
+
+from safetensors.torch import load as safetensors_load
+
+from t5 import t5_encode_text
 
 #################################################################################
 #                             Training Helper Functions                         #
@@ -168,8 +139,7 @@ def main(args):
     if rank == 0:
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
         experiment_index = len(glob(f"{args.results_dir}/*"))
-        model_string_name = args.model
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+        experiment_dir = f"{args.results_dir}/{experiment_index:03d}"  # Create an experiment folder
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
@@ -179,22 +149,27 @@ def main(args):
         logger = create_logger(None)
 
     # Create model:
-    model = importlib.import_module(f"models.{args.model}").Model(
+    model = LatteT2V(
         **configs.get("model", {})
     )
+    model.gradient_checkpointing = True
+    with open("results/open_sora_v1_1_f64.safetensors", "rb") as f:
+        data = f.read()
+    keys_vin = safetensors_load(data)
+    # model.load_state_dict(state_dict, strict=False)
 
     # mismatching loading
-    # _current_model = model.state_dict()
+    _current_model = model.state_dict()
     # keys_vin = torch.load("results/DiT-XL-2-256x256.pt", map_location="cpu", weights_only=False)
-    # new_state_dict={k:v if v.size()==_current_model[k].size() else _current_model[k] for k,v in zip(_current_model.keys(), keys_vin.values())}
-    # model.load_state_dict(new_state_dict, strict=False)
+    new_state_dict={k:v if v.size()==_current_model[k].size() else _current_model[k] for k,v in zip(_current_model.keys(), keys_vin.values())}
+    model.load_state_dict(new_state_dict, strict=False)
 
     ema = deepcopy(model)           # Create an EMA of the model for use after training
     requires_grad(ema, False)
 
     # Note that parameter initialization is done within the DiT constructor
     local_rank = int(os.environ["LOCAL_RANK"])
-    model = DDP(model.to(device), device_ids=[local_rank], output_device=local_rank)
+    model = DDP(model.to(device), device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
     vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}", torch_dtype=torch.float16).to(device)
     logger.info(f"DiT Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
@@ -271,27 +246,25 @@ def main(args):
                 pos = pos.to(device).to(torch.float16)
 
                 with torch.no_grad():
+                    y = t5_encode_text(y).to(torch.float16)
                     x = rearrange(x, "N C T H W -> (N T) C H W")
                     x = vae.encode(x).latent_dist.sample().mul_(0.18215)
                     x = rearrange(x, "(N T) C H W -> N C T H W", T=args.video_length)
-
                 noise = torch.randn_like(x, dtype=x.dtype)
                 timesteps = torch.randint(
                     0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device
                 )
 
-                first_frame = x[:, :, :1]
-                first_pos = pos[:, :, :1]
                 noisy_model_input = noise_scheduler.add_noise(x, noise, timesteps)
-
                 with torch.autocast(device_type='cuda', dtype=torch.float16):
                     model_pred = model(
                         noisy_model_input,
-                        timesteps,
-                        pos=pos,
-                        first_frame=first_frame,
-                        first_pos=first_pos
-                    )
+                        encoder_hidden_states=y,
+                        timestep=timesteps,
+                        added_cond_kwargs={"resolution": None, "aspect_ratio": None},
+                        enable_temporal_attentions=False,
+                        return_dict=False
+                    )[0]
                     if noise_scheduler.config.prediction_type == "epsilon":
                         target = noise
                     elif noise_scheduler.config.prediction_type == "v_prediction":
@@ -361,7 +334,6 @@ if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-path", type=str, required=True)
-    parser.add_argument("--model", type=str, required=True)
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--dataset", type=str, default="cifar10")
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)

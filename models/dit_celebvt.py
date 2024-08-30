@@ -248,7 +248,7 @@ class Model(nn.Module):
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
-
+        # print("========>", t.device, t.dtype, t)
         # print("<==========", x.shape, first_frame.shape, pos.shape)
 
         x = torch.cat([x, first_frame], dim=2)
@@ -258,43 +258,24 @@ class Model(nn.Module):
 
         x = rearrange(x, "N C T H W -> (N T) C H W")
         x = self.x_embedder(x)  # (N, T, D), where T = H * W / patch_size ** 2
-        # print("<==========", x.shape, pos.shape, first_frame.shape, first_pos.shape)
-        with torch.no_grad():
-            pos_emb = get_nd_sincos_pos_embed_from_grid(self.hidden_size, pos).detach()
-        pos_emb = rearrange(pos_emb, "(N T Z) D -> (N T) Z D", N=N, T=T)
-        # print("==========>", x.shape, pos_emb.shape)
-        x = x + pos_emb
-
-        # put t back
         x = rearrange(x, "(N T) Z D -> N (T Z) D", N=N)
 
+        with torch.no_grad():
+            pos_emb = get_nd_sincos_pos_embed_from_grid(self.hidden_size, pos).detach()
+        pos_emb = rearrange(pos_emb, "(N T Z) D -> N (T Z) D", N=N, T=T)
+
         t = self.t_embedder(t)                   # (N, D)
+        c = t.unsqueeze(1).repeat(1, x.shape[1], 1) + pos_emb
 
-        c = t.unsqueeze(1).repeat(1, x.shape[1], 1)
-
-        if y is not None:
-            if self.use_y_embedder:
-                y = self.y_embedder(y)                   # (N, D)
-            # print("========>", c.shape, y.shape)
-            c = c + y                                # (N, D)
-
-        # !!! don't confuse with torch.Tensor.repeat() !!!
-        # https://pytorch.org/docs/stable/generated/torch.repeat_interleave.html
-        # c = rearrange(c.unsqueeze(1).repeat(1, T + 1, 1, 1), 'N T Z D -> N (T Z) D')
-        # print("==========>", x.shape, c.shape)
         for block in self.blocks:
             # x = block(x, c)                      # (N, T, D)
             x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, c)       # (N, T, D)
 
-        # print("x======>", x.shape, c.shape)
-
         x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        
+
         x = x[:, :(x.shape[1] // T * (T - 1))]        # simply ignore the condition
-        # print("x======>", x.shape, c.shape)
         x = rearrange(x, "N (T Z) D -> (N T) Z D", T=T-1)
         x = self.unpatchify(x, H, W)                    # (N, out_channels, H, W)
-        # print("x======>", x.shape, c.shape)
         x = rearrange(x, "(N T) C H W -> N C T H W", T=T-1)
         return x
 

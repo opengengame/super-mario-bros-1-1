@@ -13,9 +13,9 @@ model:
   patch_size: 2
   input_size: [40, 64]
   learn_sigma: False
-  depth: 28
-  hidden_size: 1152
-  num_heads: 16
+  depth: 12
+  hidden_size: 768
+  num_heads: 12
   use_y_embedder: False
   condition_channels: 2048      # useless here
 
@@ -33,5 +33,5 @@ dataset:
 ema_iter: 100
 log_every: 10
 warmup_steps: 0
-global_batch_size: 8
+global_batch_size: 32
 learning_rate: 0.00004
