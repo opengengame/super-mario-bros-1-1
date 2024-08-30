@@ -10,7 +10,7 @@ noise_scheduler:
   steps_offset: 1
 
 model:
-  num_layers: 28
+  num_layers: 20
   attention_head_dim: 72
   patch_size_t: 1
   patch_size: 2
