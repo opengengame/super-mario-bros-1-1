@@ -1,15 +1,15 @@
 """
 Running exmaples:
-$ HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 29502 --nnodes=1 \
+$ CUDA_VISIBLE_DEVICE=3 HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 torchrun --master_port 29502 --nnodes=1 \
     --node_rank=0 \
-    --nproc_per_node=8 \
+    --nproc_per_node=1 \
     train_latte_mario.py \
     --num-workers 4 \
-    --ckpt-every 500 \
+    --ckpt-every 1000 \
     --image-size 256 \
     --dataset action_video \
     --vae ema \
-    --config-path configs/mario_latte_v0.yaml
+    --config-path configs/mario_latte_t1_v0.yaml
 """
 
 import importlib
@@ -258,7 +258,8 @@ def main(args):
                         timestep=timesteps,
                         added_cond_kwargs={"resolution": None, "aspect_ratio": None},
                         enable_temporal_attentions=True,
-                        return_dict=False
+                        return_dict=False,
+                        t1_pos = pos if configs.get("use_t1", False) else None
                     )[0]
                     if noise_scheduler.config.prediction_type == "epsilon":
                         target = noise

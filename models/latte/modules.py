@@ -22,6 +22,8 @@ from dataclasses import dataclass
 
 from models.latte.pos_embed import get_2d_sincos_pos_embed, RoPE1D, RoPE2D, LinearScalingRoPE2D, LinearScalingRoPE1D
 
+from einops import rearrange
+
 if is_xformers_available():
     import xformers
     import xformers.ops
@@ -144,7 +146,7 @@ class PatchEmbed(nn.Module):
         )
         self.register_buffer("pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0), persistent=False)
 
-    def forward(self, latent):
+    def forward(self, latent, t1_pos=None):
         height, width = latent.shape[-2] // self.patch_size, latent.shape[-1] // self.patch_size
 
         latent = self.proj(latent)
@@ -166,8 +168,46 @@ class PatchEmbed(nn.Module):
             pos_embed = pos_embed.float().unsqueeze(0).to(latent.device)
         else:
             pos_embed = self.pos_embed
+        if t1_pos is not None:
+            T = latent.shape[0]
+            with torch.no_grad():
+                t1_pos = get_nd_sincos_pos_embed_from_grid(self.pos_embed.shape[-1], t1_pos).detach()
+            t1_pos = rearrange(t1_pos, "(T Z) D -> T Z D", T=T)
+            return (latent + t1_pos).to(latent.dtype)
         return (latent + pos_embed).to(latent.dtype)
 
+
+def get_nd_sincos_pos_embed_from_grid(embed_dim, pos):
+    C = pos.size(1)
+    assert embed_dim % C % 2 == 0
+
+    emb = []
+    for i in range(C):
+        emb_i = get_1d_sincos_pos_embed_from_grid(embed_dim // C, pos[:, i])
+        emb.append(emb_i)
+    emb = torch.cat(emb, dim=1)  # (H*W, D)
+    return emb
+
+def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
+    """
+    embed_dim: output dimension for each position
+    pos: a list of positions to be encoded: size (M,)
+    out: (M, D)
+    """
+    omega = torch.arange(embed_dim // 2, dtype=torch.float64, device=pos.device)
+    omega /= embed_dim / 2.0
+    omega = 1.0 / 10000**omega  # (D/2,)
+
+    pos = pos.reshape(-1)  # (M,)
+    out = torch.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
+
+    emb_sin = torch.sin(out)  # (M, D/2)
+    emb_cos = torch.cos(out)  # (M, D/2)
+
+    emb = torch.cat([emb_sin, emb_cos], dim=1)  # (M, D)
+
+    emb = emb.to(pos.dtype)
+    return emb
 
 @maybe_allow_in_graph
 class Attention(nn.Module):

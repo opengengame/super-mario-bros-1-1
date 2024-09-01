@@ -288,6 +288,7 @@ class LatteT2V(ModelMixin, ConfigMixin):
             use_image_num: int = 0,
             enable_temporal_attentions: bool = True,
             return_dict: bool = True,
+            t1_pos = None,
     ):
         """
         The [`Transformer2DModel`] forward method.
@@ -376,7 +377,7 @@ class LatteT2V(ModelMixin, ConfigMixin):
             hw = (height, width)
             num_patches = height * width
 
-            hidden_states = self.pos_embed(hidden_states.to(self.dtype))  # alrady add positional embeddings
+            hidden_states = self.pos_embed(hidden_states.to(self.dtype), t1_pos)  # alrady add positional embeddings
 
             if self.adaln_single is not None:
                 if self.use_additional_conditions and added_cond_kwargs is None:
@@ -407,7 +408,7 @@ class LatteT2V(ModelMixin, ConfigMixin):
         # prepare timesteps for spatial and temporal block
         timestep_spatial = repeat(timestep, 'b d -> (b f) d', f=frame + use_image_num).contiguous()
         timestep_temp = repeat(timestep, 'b d -> (b p) d', p=num_patches).contiguous()
-        
+
         pos_hw, pos_t = None, None
         if self.use_rope:
             pos_hw, pos_t = self.make_position(input_batch_size, frame, use_image_num, height, width, hidden_states.device)

@@ -5,7 +5,7 @@ References:
 - https://github.com/facebookresearch/DiT/blob/main/sample.py
 
 Running exmaples:
-$ CUDA_VISIBLE_DEVICES=0 HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 python sample_latte_runjump.py \
+$ CUDA_VISIBLE_DEVICES=3 HF_HOME=/mnt/store/kmei1/HF_HOME NCCL_P2P_DISABLE=1 python sample_latte_runjump.py \
     --model dit_celebvt \
     --dataset text_video \
     --image-size 256 \
