@@ -10,7 +10,7 @@ noise_scheduler:
   steps_offset: 1
 
 model:
-  num_layers: 28
+  num_layers: 20
   attention_head_dim: 72
   patch_size_t: 1
   patch_size: 2
@@ -55,4 +55,4 @@ log_every: 10
 warmup_steps: 200
 global_batch_size: 16
 learning_rate: 2e-5
-iters_to_accumulate: 2
+iters_to_accumulate: 1
