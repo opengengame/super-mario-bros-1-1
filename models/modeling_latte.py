@@ -390,6 +390,7 @@ class LatteT2V(ModelMixin, ConfigMixin):
                 )
 
         # 2. Blocks
+        encoder_hidden_states_spatial = None
         if self.caption_projection is not None:
             batch_size = hidden_states.shape[0]
             encoder_hidden_states = self.caption_projection(encoder_hidden_states.to(self.dtype))  # 3 120 1152
