@@ -47,11 +47,12 @@ dataset:
   resolution: 256
   video_length: 17
   latent_scale: 16
+  actions: 7
 
 
 ema_iter: 100
 log_every: 10
 warmup_steps: 200
-global_batch_size: 8
+global_batch_size: 16
 learning_rate: 2e-5
 iters_to_accumulate: 2

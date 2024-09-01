@@ -174,7 +174,6 @@ def main(args):
     noise_scheduler = DDPMScheduler(**configs.get("noise_scheduler", {}))
 
     # Setup data:
-    data_config = configs.get("data", {})
     dataset = importlib.import_module(f"datasets.{args.dataset}").Dataset(
         **configs.get("dataset", {})
     )

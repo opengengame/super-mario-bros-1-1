@@ -255,12 +255,15 @@ class Dataset(VideoFolder):
         resolution: List[int],
         video_length: int = 128,
         latent_scale = 8,
+        actions = 7,
     ):
         super().__init__(data_root, size=resolution, nframes=video_length)
         self.data_root = data_root
+        self.actions = actions
 
         videos = os.listdir(data_root)
         videos.sort()
+        videos = videos[:80_000]
 
         self._video_fnames = videos
 
@@ -297,16 +300,15 @@ class Dataset(VideoFolder):
         # ]
 
         video = rearrange(video, 'T H W C -> C T H W')
-        grid_size = [self.nframes, video.shape[2] // self.latent_scale, video.shape[3] // self.latent_scale, 7]
+        grid_size = [self.nframes, video.shape[2] // self.latent_scale, video.shape[3] // self.latent_scale, self.actions]
         grid_t = np.arange(grid_size[0], dtype=np.float32)
         grid_h = np.arange(grid_size[1], dtype=np.float32)
         grid_w = np.arange(grid_size[2], dtype=np.float32)
-        grid_action = np.arange(actions[0], dtype=np.float32)
+        grid_action = np.arange(grid_size[3], dtype=np.float32)
         grid = np.meshgrid(grid_t, grid_h, grid_w, grid_action, indexing='ij')  # here w goes first
         grid = np.stack(grid, axis=0)
 
-        return (video, actions , grid)
+        return (video, actions, grid[:, :, :, :, actions[0]])
 
     def __len__(self):
         return self._total_size
-
