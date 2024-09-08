@@ -263,7 +263,7 @@ class Dataset(VideoFolder):
 
         videos = os.listdir(data_root)
         videos.sort()
-        videos = videos[:10_000]
+        videos = videos[:100_000]
 
         self._video_fnames = videos
 
@@ -277,6 +277,9 @@ class Dataset(VideoFolder):
         video = self._read_video(
             video_path=video_path, nframes=self.nframes, size=self.size
         )
+        video = video.astype(np.float32)
+        video = (video - 127.5) / 127.5
+
         if video.shape[0] != self.nframes:
             raise ValueError(
                 f"{video_path} has less than {self.nframes} frames only have {video.shape[0]}"

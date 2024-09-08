@@ -48,6 +48,8 @@ from models.modeling_latte import LatteT2V
 
 from safetensors.torch import load as safetensors_load
 
+from diffusion import create_diffusion
+
 #################################################################################
 #                             Training Helper Functions                         #
 #################################################################################
@@ -158,6 +160,12 @@ def main(args):
     _current_model = model.state_dict()
     new_state_dict={k:v if v.size()==_current_model[k].size() else _current_model[k] for k,v in zip(_current_model.keys(), keys_vin.values())}
     model.load_state_dict(new_state_dict, strict=False)
+    diffusion = create_diffusion(
+        timestep_respacing="",
+        predict_xstart=True,
+        learn_sigma=False,
+        sigma_small=True
+    )  # default: 1000 steps, linear noise schedule
 
     ema = deepcopy(model)           # Create an EMA of the model for use after training
     requires_grad(ema, False)
@@ -248,9 +256,15 @@ def main(args):
                 first_frame, x = x[:, :, :1], x[:, :, 1:]
                 first_pos, pos = pos[:, :, :1], pos[:, :, 1:]
                 noise = torch.randn_like(x, dtype=x.dtype, device=x.device)
-                timesteps = torch.randint(
-                    0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device
+                # timesteps = torch.randint(
+                #     0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device
+                # )
+                timesteps = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+                model_kwargs = dict(
+                    t1_pos = pos if configs.get("use_t1", False) else None
                 )
+                loss_dict = diffusion.training_losses(model, x, timesteps, model_kwargs)
+
                 noisy_model_input = noise_scheduler.add_noise(x, noise, timesteps)
                 noisy_model_input = torch.cat([first_frame.repeat(1, 1, x.size(2), 1, 1), noisy_model_input], dim=1)
 

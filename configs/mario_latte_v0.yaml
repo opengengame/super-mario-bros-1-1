@@ -54,5 +54,5 @@ ema_iter: 100
 log_every: 10
 warmup_steps: 200
 global_batch_size: 16
-learning_rate: 2e-5
+learning_rate: 4e-5
 iters_to_accumulate: 1
