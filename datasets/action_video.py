@@ -140,9 +140,10 @@ class VideoFolder(Dataset):
                 for fname in files
             }
             _video_fnames = sorted(
-                fname
+                [fname
                 for fname in _all_fnames
-                if self._file_ext(fname) in self.IMG_EXTENSIONS
+                if self._file_ext(fname) in self.IMG_EXTENSIONS],
+                key = lambda x: int(x[:-4])
             )
             for fname in _video_fnames:
                 with open(os.path.join(video_path, fname), "rb") as f:
@@ -309,8 +310,9 @@ class Dataset(VideoFolder):
         grid_action = np.arange(grid_size[3], dtype=np.float32)
         grid = np.meshgrid(grid_t, grid_h, grid_w, grid_action, indexing='ij')  # here w goes first
         grid = np.stack(grid, axis=0)
+        grid = rearrange(grid[:, np.arange(grid_size[0]), :, :, actions], "T N H W -> N T H W")
 
-        return (video, actions, grid[:, :, :, :, actions[0]])
+        return (video, actions, grid)
 
     def __len__(self):
         return self._total_size

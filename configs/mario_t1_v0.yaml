@@ -1,0 +1,31 @@
+model:
+  input_size: 32
+  patch_size: 2
+  # in_channels: 64
+  in_channels: 4
+  out_channels: 4
+  hidden_size: 1152
+  depth: 28
+  num_heads: 16
+  mlp_ratio: 4.0
+  learn_sigma: true
+  condition_channels: 2048      # useless here
+
+
+dataset:
+  data_root: /data/kmei1/projects/t1/datasets/super-mario-bros-reinforcement-learning/clips/
+  # data_root: /mnt/store/kmei1/projects/t1/datasets/super-mario-bros-reinforcement-learning/clips/
+  resolution: 256
+  video_length: 17
+  latent_scale: 16
+  actions: 7
+
+
+ema_iter: 50
+log_every: 10
+warmup_steps: 200
+global_batch_size: 64
+# global_batch_size: 8
+learning_rate: 4e-5
+iters_to_accumulate: 1      # not support yet
+use_t1: true
