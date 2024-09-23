@@ -12,7 +12,6 @@ import enum
 
 from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
 
-
 def mean_flat(tensor):
     """
     Take the mean over all non-batch dimensions.
@@ -333,6 +332,18 @@ class GaussianDiffusion:
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
         assert x_t.shape == eps.shape
+        # ipdb.set_trace()
+        # print("====> pred_xstart",
+        #       self.sqrt_recip_alphas_cumprod[t],
+        #       x_t.max(),
+        #       x_t.mean(),
+        #       x_t.min(),
+        #       self.sqrt_recipm1_alphas_cumprod[t],
+        #       eps.max(),
+        #       eps.mean(),
+        #       eps.min()
+        # )
+        # ipdb.set_trace()
         return (
             _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
             - _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps
