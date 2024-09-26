@@ -13,8 +13,9 @@ from diffusion import create_diffusion
 import gradio as gr
 import numpy as np
 import PIL
+from tqdm import tqdm
 
-device = "cuda:7"
+device = "cuda:6"
 
 class ActionGameDemo:
     nframes: int = 17
@@ -49,7 +50,7 @@ class ActionGameDemo:
         self.all_actions = action
 
         self.diffusion = create_diffusion(
-            timestep_respacing="ddim2",
+            timestep_respacing="ddim20",
         )
 
         _video = x[0]
@@ -91,16 +92,21 @@ class ActionGameDemo:
         next_frame = PIL.Image.fromarray(np.uint8(255 * (next_frame / 2 + 0.5)))
         return next_frame, "actions:" + str(self.all_actions.cpu().numpy())
 
+
     def output_video(self):
         _samples = rearrange(self.all_frames, "N C T H W -> (N T) C H W")
         with torch.no_grad():
             vidoes = []
-            for frame in _samples:
+            for frame in _samples[::8]:
                 vidoes.append(self.vae.decode(frame.unsqueeze(0) / 0.13025).sample)
             vidoes = torch.cat(vidoes)
         vidoes = torch.clamp(vidoes, -1, 1)
         del _samples
         video = 255 * (vidoes.clip(-1, 1) / 2 + 0.5)
+        
+        screeshoot = PIL.Image.fromarray(np.uint8(rearrange(video.cpu().numpy(), "T C H W -> H (T W) C")))
+        screeshoot.save("samples.png")
+
         torchvision.io.write_video(
             "samples.mp4",
             video.permute(0, 2, 3, 1).cpu().numpy(),
@@ -139,8 +145,14 @@ class ActionGameDemo:
 if __name__ == "__main__":
     action_game = ActionGameDemo(
         "configs/mario_t1_v0.yaml",
-        "results/002-t1/checkpoints/0180000.pt"
+        "results/002-t1/checkpoints/0100000.pt"
     )
-    demo = action_game.create_interface()
-    demo.launch()
+    # demo = action_game.create_interface()
+    # demo.launch()
+    # for i in tqdm(range(64)):
+    #     action_game.next_frame_predict(4)
+    # action_game.output_video()
+
     # next_frame = action_game.next_frame_predict(6)
+    for action in action_game.all_actions:
+        action_game.next_frame_predict(action)
