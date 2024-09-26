@@ -147,12 +147,6 @@ if __name__ == "__main__":
         "configs/mario_t1_v0.yaml",
         "results/002-t1/checkpoints/0100000.pt"
     )
-    # demo = action_game.create_interface()
-    # demo.launch()
-    # for i in tqdm(range(64)):
-    #     action_game.next_frame_predict(4)
-    # action_game.output_video()
+    demo = action_game.create_interface()
+    demo.launch()
 
-    # next_frame = action_game.next_frame_predict(6)
-    for action in action_game.all_actions:
-        action_game.next_frame_predict(action)
