@@ -15,12 +15,11 @@ import numpy as np
 import PIL
 from tqdm import tqdm
 
-device = "cuda:6"
 
 class ActionGameDemo:
     nframes: int = 17
     memory_frames: int = 16
-    def __init__(self, config_path, ckpt_path) -> None:
+    def __init__(self, config_path, ckpt_path, device="cpu") -> None:
         configs = OmegaConf.load(config_path)
         configs.dataset.data_root = "demo"
         model = T1Model(**configs.get("model", {}))
@@ -118,7 +117,7 @@ class ActionGameDemo:
     def create_interface(self):
         with gr.Blocks() as demo:
             gr.Markdown("#  GenGame - OpenGenGAME/super-mario-bros-rl-1-1")
-            gr.Markdown("Try to control the game: Right, A, Right + A, Left")
+            gr.Markdown("Try to control the game by clicking buttons")
 
             with gr.Row():
                 image_output = gr.Image(label="Next Frame")
