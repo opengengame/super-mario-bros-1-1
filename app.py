@@ -26,6 +26,7 @@ class ActionGameDemo:
         model.load_state_dict(torch.load(ckpt_path, map_location="cpu")["ema"])
         model = model.to(device)
         self.model = model
+        self.device = device
 
         self.vae = AutoencoderKL.from_pretrained("stabilityai/sdxl-vae").to(device)
         dataset = ActionDataset(
@@ -59,6 +60,7 @@ class ActionGameDemo:
         self.grid = torch.from_numpy(np.stack(grid, axis=0)[None]).to(device)
 
     def next_frame_predict(self, action):
+        device = self.device
         z = torch.randn(1, 4, 1, 32, 32, device=device)
         past_pos = torch.cat([
             torch.tensor([i for i in range(self.memory_frames)], device=device)[None, None, :, None, None].expand(1, 1, self.memory_frames, *self.all_poses.shape[-2:]),
