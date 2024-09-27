@@ -19,7 +19,7 @@ from tqdm import tqdm
 class ActionGameDemo:
     nframes: int = 17
     memory_frames: int = 16
-    def __init__(self, config_path, ckpt_path, device="cpu") -> None:
+    def __init__(self, config_path, ckpt_path, device="cpu", sampler="ddim20") -> None:
         configs = OmegaConf.load(config_path)
         configs.dataset.data_root = "demo"
         model = T1Model(**configs.get("model", {}))
@@ -50,7 +50,7 @@ class ActionGameDemo:
         self.all_actions = action
 
         self.diffusion = create_diffusion(
-            timestep_respacing="ddim20",
+            timestep_respacing=sampler,
         )
 
         _video = x[0]
