@@ -98,7 +98,7 @@ class ActionGameDemo:
         _samples = rearrange(self.all_frames, "N C T H W -> (N T) C H W")
         with torch.no_grad():
             vidoes = []
-            for frame in _samples[::8]:
+            for frame in _samples:
                 vidoes.append(self.vae.decode(frame.unsqueeze(0) / 0.13025).sample)
             vidoes = torch.cat(vidoes)
         vidoes = torch.clamp(vidoes, -1, 1)
