@@ -108,7 +108,7 @@ class ActionGameDemo:
 
         torchvision.io.write_video(
             "samples.mp4",
-            video.permute(0, 2, 3, 1).cpu().numpy(),
+            video.permute(0, 2, 3, 1).cpu(),
             fps=8,
             video_codec="h264",
         )
